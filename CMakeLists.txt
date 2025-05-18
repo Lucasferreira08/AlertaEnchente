@@ -39,12 +39,11 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(AlertaEnchente AlertaEnchente.c 
-        ${CMAKE_CURRENT_LIST_DIR}/libs/buzzer.c
-        ${CMAKE_CURRENT_LIST_DIR}/libs/display.c
-        ${CMAKE_CURRENT_LIST_DIR}/libs/global_manage.c
-        ${CMAKE_CURRENT_LIST_DIR}/libs/joystick.c
-        ${CMAKE_CURRENT_LIST_DIR}/libs/processamento.c
-        ${CMAKE_CURRENT_LIST_DIR}/libs/ssd1306.c)
+        ${CMAKE_CURRENT_LIST_DIR}/libs/ssd1306.c
+        ${CMAKE_CURRENT_LIST_DIR}/libs/init_config.c
+        ${CMAKE_CURRENT_LIST_DIR}/libs/matriz.c)
+
+pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/pio_matrix.pio)
 
 pico_set_program_name(AlertaEnchente "AlertaEnchente")
 pico_set_program_version(AlertaEnchente "0.1")
@@ -69,6 +68,8 @@ target_link_libraries(AlertaEnchente
         hardware_i2c
         hardware_adc
         hardware_pwm
+        hardware_pio
+        hardware_clocks
         FreeRTOS-Kernel 
         FreeRTOS-Kernel-Heap4)
 

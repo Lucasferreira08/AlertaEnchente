@@ -7,7 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "global_manage.h"
+#include "global_data.h"   // Display OLED
  
 #define WIDTH 128
 #define HEIGHT 64
@@ -60,7 +60,7 @@ void ssd1306_vline(ssd1306_t *ssd, uint8_t x, uint8_t y0, uint8_t y1, bool value
 void ssd1306_draw_char(ssd1306_t *ssd, char c, uint8_t x, uint8_t y);
 void ssd1306_draw_string(ssd1306_t *ssd, const char *str, uint8_t x, uint8_t y);
 
-ssd1306_t *get_ssd_pointer();
+// ssd1306_t *get_ssd_pointer();
 
 // void desenha_display_alerta(ssd1306_t *display, DadosSensor *dados);
 // void desenha_display_normal(ssd1306_t *display, DadosSensor *dados);
@@ -74,5 +74,17 @@ ssd1306_t *get_ssd_pointer();
  * Desenha os dados no display no modo normal
  */
 //void desenha_display_normal(ssd1306_t *display, DadosSensor *dados);
+
+/**
+ * Desenha os dados no display no modo alerta
+ */
+void desenha_display_alerta(ssd1306_t *display, DadosSensor *dados);
+
+/**
+ * Desenha os dados no display no modo normal
+ */
+void desenha_display_normal(ssd1306_t *display, DadosSensor *dados);
+
+void display_init(ssd1306_t *ssd);
 
 #endif

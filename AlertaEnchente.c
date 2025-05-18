@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "hardware/adc.h"
+#include "hardware/pwm.h"       // API de PWM para controle de sinais sonoros
+#include "hardware/clocks.h"    // API de clocks do RP2040
 
 // #include "hardware/pwm.h"
 
@@ -13,35 +16,184 @@
 
 // Bibliotecas para periféricos
 #include "ssd1306.h"   // Display OLED
+#include "global_data.h"   // Display OLED
+#include "init_config.h"   // Display OLED
+#include "matriz.h"   // Display OLED
 
-#include "display.h"   // Display OLED
-#include "buzzer.h"
-#include "processamento.h"
-#include "joystick.h"
+#define PIN_JOYSTICK_X 26    // ADC0
+#define PIN_JOYSTICK_Y 27    // ADC1
 
-#include "global_manage.h"
+// Atraso para tarefas (ms)
+#define DELAY_LEITURA      100
+#define DELAY_PROCESSAMENTO 200
+#define DELAY_DISPLAY      500
+#define DELAY_ALERTA       1000
 
 
-#define PIN_LED_R      16
-#define PIN_LED_G      17
-#define PIN_LED_B      18
+// #define PIN_LED_R      16
+// #define PIN_LED_G      17
+// #define PIN_LED_B      18
+
+ssd1306_t ssd;
+
+QueueHandle_t xQueueDadosSensor;      // Fila para dados do sensor
+QueueHandle_t xQueueDadosDisplay;     // Fila para dados a serem exibidos no display
+QueueHandle_t xQueueAlertas;          // Fila para comandos de alerta
+QueueHandle_t xQueueBuzzer;          // Fila para comandos de alerta
+
+/**
+ * Tarefa para atualização do display OLED
+ */
+void vDisplayTask(void *pvParameters) {
+    DadosSensor dados_display;
+
+    display_init(&ssd);
+    
+    while (1) {
+
+        printf("Display Task \n");
+
+        // Recebe dados da fila de display
+        if (xQueueReceive(xQueueDadosDisplay, &dados_display, portMAX_DELAY) == pdTRUE) {
+            printf("Entrou no if - Display \n");
+            // Atualiza o display de acordo com o modo de operação
+            if (dados_display.modo_alerta) {
+                //desenha_display_alerta(get_ssd_pointer(), &dados_display);
+                printf("Display Task - desenho\n");
+                desenha_display_alerta(&ssd, &dados_display);
+                printf("Desenho 1\n");
+            } else {
+                printf("Display Task - desenho 2\n");
+                desenha_display_normal(&ssd, &dados_display);
+                printf("Desenho 2\n");
+            }
+        }
+        
+        printf("Display Task - delay\n");
+        vTaskDelay(pdMS_TO_TICKS(DELAY_DISPLAY));
+    }
+}
+
+void vProcessamentoTask(void *pvParameters) {
+    DadosSensor dados_recebidos;
+    
+    while (1) {
+        // Recebe dados da fila de leitura
+        if (xQueueReceive(xQueueDadosSensor, &dados_recebidos, portMAX_DELAY) == pdTRUE) {
+            // Aplica qualquer processamento adicional aqui se necessário
+            
+            // Envia os dados processados para as filas de display e alertas
+            xQueueSend(xQueueDadosDisplay, &dados_recebidos, 0);
+            xQueueSend(xQueueAlertas, &dados_recebidos, 0);
+            xQueueSend(xQueueBuzzer, &dados_recebidos, 0);
+            
+            // Para fins de depuração
+            printf("Dados processados: Nível: %d%%, Chuva: %d%%, Modo: %s\n", 
+                   dados_recebidos.nivel_agua, 
+                   dados_recebidos.volume_chuva, 
+                   dados_recebidos.modo_alerta ? "ALERTA" : "Normal");
+        }
+        
+        // Pequeno atraso para não sobrecarregar o processador
+        vTaskDelay(pdMS_TO_TICKS(DELAY_PROCESSAMENTO));
+    }
+}
+
+void vJoystickTask(void *pvParameters)
+{
+    DadosSensor dados;
+
+    init_joystick();
+    
+    while (1) {
+        // Seleciona e lê o canal do joystick X (nível de água)
+        adc_select_input(0); // Canal 0 para PIN_JOYSTICK_X
+        uint16_t raw_x = adc_read();
+        
+        // Seleciona e lê o canal do joystick Y (volume de chuva)
+        adc_select_input(1); // Canal 1 para PIN_JOYSTICK_Y
+        uint16_t raw_y = adc_read();
+        
+        // Converte para porcentagem (o ADC do RP2040 é de 12 bits, ou seja, 0-4095)
+        dados.nivel_agua = (uint8_t)((raw_x * 100) / 4095);
+        dados.volume_chuva = (uint8_t)((raw_y * 100) / 4095);
+        
+        // Determina o modo de alerta com base nos valores lidos
+        dados.modo_alerta = (dados.nivel_agua >= NIVEL_AGUA_LIMITE || 
+                            dados.volume_chuva >= VOLUME_CHUVA_LIMITE);
+        
+        // Envia os dados para a fila de processamento
+        xQueueSend(xQueueDadosSensor, &dados, 0);
+        
+        // Aguarda antes da próxima leitura
+        vTaskDelay(pdMS_TO_TICKS(DELAY_LEITURA));
+    }
+}
+
+/**
+ * Tarefa para controle dos alertas visuais (LED RGB e matriz de LEDs)
+ */
+void vAlertaTask(void *pvParameters) {
+    DadosSensor dados_alerta;
+    // bool piscando = false;
+    PIO pio = pio0;            // Escolhe a instância PIO 0
+    uint sm = pio_init(pio);   // Inicializa o state machine e retorna qual SM foi usado
+    
+    while (1) {
+        // Recebe dados da fila de alertas
+        if (xQueueReceive(xQueueAlertas, &dados_alerta, 0) == pdTRUE) {
+            // Atualiza a matriz de LEDs
+            if (dados_alerta.modo_alerta) {
+                desenhar_alerta(pio, sm);
+            } else {
+                apagar_matriz(pio, sm);
+            }
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(DELAY_ALERTA / 2)); // Metade do tempo para piscar mais rápido
+    }
+}
+
+void vBuzzerTask(void *pvParameters) {
+    DadosSensor dados_alerta;
+    buzzer_pwm_config();
+    leds_init();
+    
+    while (1) {
+        // Recebe dados da fila de alertas
+        if (xQueueReceive(xQueueBuzzer, &dados_alerta, 0) == pdTRUE) {
+            if (dados_alerta.modo_alerta) {
+                gpio_put(LED_RED, 0);
+                gpio_put(LED_BLUE, 1);
+                pwm_set_gpio_level(BUZZER_PIN, 2048);
+                vTaskDelay(pdMS_TO_TICKS(100));
+
+                gpio_put(LED_BLUE, 0);
+                gpio_put(LED_RED, 1);
+                pwm_set_gpio_level(BUZZER_PIN, 0);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                
+                gpio_put(LED_RED, 0);
+            } else {
+                pwm_set_gpio_level(BUZZER_PIN, 0);
+            }
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(DELAY_ALERTA));
+    }
+}
 
 int main() {
     stdio_init_all();
     
-    // Inicializa periféricos
-    display_init(get_ssd_pointer());
-    init_buzzer();
-    init_joystick();
-    configura_pwm_buzzer();
+    xQueueDadosSensor = xQueueCreate(1, sizeof(DadosSensor));
+    xQueueDadosDisplay = xQueueCreate(1, sizeof(DadosSensor));
+    xQueueAlertas = xQueueCreate(1, sizeof(DadosSensor));
+    xQueueBuzzer = xQueueCreate(1, sizeof(DadosSensor));
 
-    sleep_ms(10000);
+    // set_queue_alertas(xQueueCreate(1, sizeof(DadosSensor)));
     
-    set_queue_sensor_date(xQueueCreate(1, sizeof(DadosSensor)));
-    set_queue_dados_display(xQueueCreate(1, sizeof(DadosSensor)));
-    set_queue_alertas(xQueueCreate(1, sizeof(DadosSensor)));
-    
-    if (*get_queue_sensor_date() == NULL || *get_queue_dados_display() == NULL || *get_queue_alertas() == NULL) {
+    if (xQueueDadosSensor == NULL || xQueueDadosDisplay == NULL || xQueueAlertas == NULL || xQueueBuzzer == NULL) {  
         printf("Erro ao criar filas!\n");
         while(1); // Trava em caso de erro
     }
@@ -50,164 +202,16 @@ int main() {
     
     // Cria as tarefas
     xTaskCreate(vJoystickTask, "LeituraJoystick", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    xTaskCreate(vTaskProcessamentoDados, "ProcessamentoDados", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    xTaskCreate(vTaskDisplayOLED, "DisplayOLED", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    // xTaskCreate(vTaskAlertaVisual, "AlertaVisual", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    xTaskCreate(vTaskAlertaSonoro, "AlertaSonoro", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(vProcessamentoTask, "ProcessamentoDados", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(vDisplayTask, "DisplayOLED", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(vAlertaTask, "AlertaVisual", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(vBuzzerTask, "AlertaBuzzer", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    // xTaskCreate(vTaskAlertaSonoro, "AlertaSonoro", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
     
     printf("Tarefas criadas com sucesso.\n");
     
     // Inicia o escalonador
     vTaskStartScheduler();
+
+    panic_unsupported();
 }
-
-/**
- * Configura o hardware básico da placa
- */
-void configura_hardware(void) {
-    // Configura pinos do LED RGB como saída
-    gpio_init(PIN_LED_R);
-    gpio_init(PIN_LED_G);
-    gpio_init(PIN_LED_B);
-    gpio_set_dir(PIN_LED_R, GPIO_OUT);
-    gpio_set_dir(PIN_LED_G, GPIO_OUT);
-    gpio_set_dir(PIN_LED_B, GPIO_OUT);
-}
-
-// /**
-//  * Inicializa o display OLED
-//  */
-// void inicializa_display(void) {
-//     display.external_vcc = false;
-//     ssd1306_init(&display, OLED_WIDTH, OLED_HEIGHT, OLED_ADDR, I2C_PORT);
-//     ssd1306_clear(&display);
-    
-//     // Exibe mensagem inicial
-//     ssd1306_draw_string(&display, 0, 0, 2, "Sistema de");
-//     ssd1306_draw_string(&display, 0, 20, 2, "Alerta de");
-//     ssd1306_draw_string(&display, 0, 40, 2, "Enchente");
-//     ssd1306_show(&display);
-//     sleep_ms(2000);
-//     ssd1306_clear(&display);
-//     ssd1306_show(&display);
-// }
-
-/**
- * Inicializa a matriz de LEDs
- */
-// void inicializa_matriz_leds(void) {
-//     ht16k33_init(&matrix, I2C_PORT, MATRIX_ADDR);
-//     ht16k33_clear_display(&matrix);
-//     ht16k33_set_brightness(&matrix, 15); // Brilho máximo (0-15)
-//     ht16k33_display_on(&matrix);
-// }
-
-//------------------------------------------------------------------------------------------------
-
-/**
- * Define a cor do LED RGB
- */
-// void set_rgb_led(uint8_t r, uint8_t g, uint8_t b) {
-//     gpio_put(PIN_LED_R, r ? 1 : 0);
-//     gpio_put(PIN_LED_G, g ? 1 : 0);
-//     gpio_put(PIN_LED_B, b ? 1 : 0);
-// }
-
-// /**
-//  * Desenha padrão normal na matriz de LEDs
-//  */
-// void desenha_matriz_normal(ht16k33_t *matrix) {
-//     // Limpa a matriz
-//     ht16k33_clear_display(matrix);
-    
-//     // Desenha um padrão normal (ex: um sorriso simples)
-//     uint8_t sorriso[8] = {
-//         0b00000000,
-//         0b00100100,
-//         0b00100100,
-//         0b00000000,
-//         0b01000010,
-//         0b00111100,
-//         0b00000000,
-//         0b00000000
-//     };
-    
-//     for (int i = 0; i < 8; i++) {
-//         matrix->display_buffer[i] = sorriso[i];
-//     }
-    
-//     ht16k33_update_display(matrix);
-// }
-
-// /**
-//  * Desenha símbolo de alerta na matriz de LEDs
-//  */
-// void desenha_matriz_alerta(ht16k33_t *matrix) {
-//     // Limpa a matriz
-//     ht16k33_clear_display(matrix);
-    
-//     // Desenha um símbolo de alerta (triângulo com exclamação)
-//     uint8_t alerta[8] = {
-//         0b00000000,
-//         0b00011000,
-//         0b00111100,
-//         0b00100100,
-//         0b01100110,
-//         0b01111110,
-//         0b11111111,
-//         0b00000000
-//     };
-    
-//     for (int i = 0; i < 8; i++) {
-//         matrix->display_buffer[i] = alerta[i];
-//     }
-    
-//     ht16k33_update_display(matrix);
-// }
-
-//------------------------------------------------------------------------------------------------
-
-/**
- * Tarefa para controle dos alertas visuais (LED RGB e matriz de LEDs)
- */
-// void vTaskAlertaVisual(void *pvParameters) {
-//     DadosSensor dados_alerta;
-//     bool piscando = false;
-    
-//     while (1) {
-//         // Recebe dados da fila de alertas
-//         if (xQueueReceive(xQueueAlertas, &dados_alerta, 0) == pdTRUE) {
-//             // Atualiza a matriz de LEDs
-//             if (dados_alerta.modo_alerta) {
-//                 desenha_matriz_alerta(&matrix);
-//             } else {
-//                 desenha_matriz_normal(&matrix);
-//             }
-            
-//             // Define o estado do LED RGB
-//             if (dados_alerta.modo_alerta) {
-//                 piscando = true;
-//                 // Vermelho para alerta
-//                 set_rgb_led(1, 0, 0);
-//             } else {
-//                 piscando = false;
-//                 // Verde para modo normal
-//                 set_rgb_led(0, 1, 0);
-//             }
-//         }
-        
-//         // Se estiver no modo de alerta, faz o LED piscar
-//         if (piscando) {
-//             static bool led_estado = true;
-//             led_estado = !led_estado;
-            
-//             if (led_estado) {
-//                 set_rgb_led(1, 0, 0); // Vermelho ligado
-//             } else {
-//                 set_rgb_led(0, 0, 0); // Desligado
-//             }
-//         }
-        
-//         vTaskDelay(pdMS_TO_TICKS(DELAY_ALERTA / 2)); // Metade do tempo para piscar mais rápido
-//     }
-// }
