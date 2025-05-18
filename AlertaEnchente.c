@@ -25,9 +25,9 @@
 
 // Atraso para tarefas (ms)
 #define DELAY_LEITURA      100
-#define DELAY_PROCESSAMENTO 200
-#define DELAY_DISPLAY      500
-#define DELAY_ALERTA       1000
+#define DELAY_PROCESSAMENTO 100
+#define DELAY_DISPLAY      100
+#define DELAY_ALERTA       50
 
 
 // #define PIN_LED_R      16
@@ -158,25 +158,37 @@ void vBuzzerTask(void *pvParameters) {
     DadosSensor dados_alerta;
     buzzer_pwm_config();
     leds_init();
+    bool ativo;
     
     while (1) {
         // Recebe dados da fila de alertas
         if (xQueueReceive(xQueueBuzzer, &dados_alerta, 0) == pdTRUE) {
             if (dados_alerta.modo_alerta) {
-                gpio_put(LED_RED, 0);
-                gpio_put(LED_BLUE, 1);
-                pwm_set_gpio_level(BUZZER_PIN, 2048);
-                vTaskDelay(pdMS_TO_TICKS(100));
-
-                gpio_put(LED_BLUE, 0);
-                gpio_put(LED_RED, 1);
-                pwm_set_gpio_level(BUZZER_PIN, 0);
-                vTaskDelay(pdMS_TO_TICKS(100));
-                
-                gpio_put(LED_RED, 0);
+                ativo = true;
             } else {
-                pwm_set_gpio_level(BUZZER_PIN, 0);
+                ativo = false;
             }
+        }
+
+        if (ativo) 
+        {
+            gpio_put(LED_RED, 0);
+            gpio_put(LED_BLUE, 1);
+            pwm_set_gpio_level(BUZZER_PIN, 2048);
+            vTaskDelay(pdMS_TO_TICKS(200));
+
+            gpio_put(LED_BLUE, 0);
+            gpio_put(LED_RED, 1);
+            pwm_set_gpio_level(BUZZER_PIN, 0);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            gpio_put(LED_RED, 0);
+        }
+        else 
+        {
+            gpio_put(LED_BLUE, 0);
+            gpio_put(LED_RED, 0);
+            pwm_set_gpio_level(BUZZER_PIN, 0);
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
         
         vTaskDelay(pdMS_TO_TICKS(DELAY_ALERTA));
@@ -202,9 +214,9 @@ int main() {
     
     // Cria as tarefas
     xTaskCreate(vJoystickTask, "LeituraJoystick", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    xTaskCreate(vProcessamentoTask, "ProcessamentoDados", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(vProcessamentoTask, "ProcessamentoDados", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(vDisplayTask, "DisplayOLED", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-    xTaskCreate(vAlertaTask, "AlertaVisual", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+    xTaskCreate(vAlertaTask, "AlertaVisual", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(vBuzzerTask, "AlertaBuzzer", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
     // xTaskCreate(vTaskAlertaSonoro, "AlertaSonoro", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
     
