@@ -27,7 +27,7 @@
 #define DELAY_LEITURA      100
 #define DELAY_PROCESSAMENTO 100
 #define DELAY_DISPLAY      100
-#define DELAY_ALERTA       50
+#define DELAY_ALERTA       20
 
 
 // #define PIN_LED_R      16
@@ -191,7 +191,7 @@ void vBuzzerTask(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(200));
         }
         
-        vTaskDelay(pdMS_TO_TICKS(DELAY_ALERTA));
+        //vTaskDelay(pdMS_TO_TICKS(DELAY_ALERTA));
     }
 }
 
